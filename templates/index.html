@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+    <title>Live Facial Expression Analysis</title>
+
+    <style>
+
+        body {
+            margin: 0;
+            background: #111;
+            color: white;
+            font-family: Arial, sans-serif;
+            text-align: center;
+        }
+
+        h1 {
+            margin-top: 25px;
+        }
+
+        .container {
+            width: 90%;
+            max-width: 1100px;
+            margin: auto;
+        }
+
+        .video-container {
+            margin-top: 20px;
+            background: black;
+            border: 2px solid #444;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+
+        #video {
+            width: 100%;
+            display: block;
+        }
+
+        button {
+            margin: 20px 8px;
+            padding: 12px 28px;
+            font-size: 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        #startButton {
+            background: #1e9e4a;
+            color: white;
+        }
+
+        #stopButton {
+            background: #d83b3b;
+            color: white;
+        }
+
+        #status {
+            margin-top: 10px;
+            font-size: 18px;
+        }
+
+        .info {
+            margin-top: 20px;
+            padding: 15px;
+            background: #1c1c1c;
+            border-radius: 8px;
+            text-align: left;
+        }
+
+        .upload-panel {
+            margin-top: 20px;
+            padding: 15px;
+            background: #1c1c1c;
+            border-radius: 8px;
+        }
+
+        #cameraPreview, #processedVideo { width: 100%; display: none; background: black; }
+        #uploadStatus { margin-top: 10px; }
+
+    </style>
+
+</head>
+
+
+<body>
+
+
+<div class="container">
+
+    <h1>
+        Facial Expression Analysis
+    </h1>
+
+
+    <div id="status">
+        Status: <b>Stopped</b>
+    </div>
+
+
+    <div class="video-container">
+
+        <img
+            id="video"
+            src="/video_feed"
+        >
+
+    </div>
+
+
+    <button
+        id="startButton"
+        onclick="startCamera()"
+    >
+        Start Live Analysis
+    </button>
+
+
+    <button
+        id="stopButton"
+        onclick="stopCamera()"
+    >
+        Stop
+    </button>
+
+    <div class="upload-panel">
+        <h3>Browser webcam and video file input</h3>
+        <button id="previewButton" onclick="enableWebcam()">Enable Browser Webcam</button>
+        <input id="videoFile" type="file" accept="video/mp4,video/avi,video/quicktime,video/x-matroska,video/webm">
+        <button id="uploadButton" onclick="uploadVideo()">Process Video File</button>
+        <div id="uploadStatus"></div>
+        <video id="cameraPreview" autoplay muted playsinline></video>
+        <img id="processedVideo" alt="Annotated video preview">
+        <div id="downloads"></div>
+    </div>
+
+
+    <div class="info">
+
+        <h3>Live Analysis</h3>
+
+        <p>
+            478 facial landmarks
+        </p>
+
+        <p>
+            52 blendshape coefficients
+        </p>
+
+        <p>
+            Multiple face detection enabled
+        </p>
+
+        <p>
+            CSV logging enabled
+        </p>
+
+        <p>
+            Logs are stored inside:
+            <b>live/</b>
+        </p>
+
+    </div>
+
+</div>
+
+
+<script>
+
+
+async function startCamera() {
+
+    const response = await fetch(
+        "/start",
+        {
+            method: "POST"
+        }
+    );
+
+    const data = await response.json();
+
+    console.log(data);
+
+
+    document.getElementById(
+        "status"
+    ).innerHTML =
+        "Status: <b style='color:lime'>LIVE</b>";
+
+
+    // Force browser to reload MJPEG stream
+    document.getElementById(
+        "video"
+    ).src =
+        "/video_feed?" + Date.now();
+}
+
+
+async function stopCamera() {
+
+    const response = await fetch(
+        "/stop",
+        {
+            method: "POST"
+        }
+    );
+
+    const data = await response.json();
+
+    console.log(data);
+
+
+    document.getElementById(
+        "status"
+    ).innerHTML =
+        "Status: <b style='color:red'>Stopped</b>";
+}
+
+async function enableWebcam() {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        const preview = document.getElementById("cameraPreview");
+        preview.srcObject = stream;
+        preview.style.display = "block";
+        document.getElementById("uploadStatus").textContent = "Browser webcam preview enabled. Start Live Analysis to process the local server webcam.";
+    } catch (error) {
+        document.getElementById("uploadStatus").textContent = "Could not access webcam: " + error.message;
+    }
+}
+
+async function uploadVideo() {
+    const file = document.getElementById("videoFile").files[0];
+    const uploadStatus = document.getElementById("uploadStatus");
+    if (!file) { uploadStatus.textContent = "Choose a video file first."; return; }
+    const form = new FormData();
+    form.append("video", file);
+    uploadStatus.textContent = "Uploading file...";
+    const response = await fetch("/upload", { method: "POST", body: form });
+    const data = await response.json();
+    if (!response.ok) { uploadStatus.textContent = data.error || "Upload failed."; return; }
+    pollJob(data.job_id);
+}
+
+async function pollJob(jobId) {
+    const response = await fetch("/jobs/" + jobId);
+    const job = await response.json();
+    const uploadStatus = document.getElementById("uploadStatus");
+    if (job.status === "complete") {
+        uploadStatus.textContent = "Processing complete.";
+        const video = document.getElementById("processedVideo");
+        // Stream JPEG frames because OpenCV's MP4 encoder may produce a codec
+        // that a browser cannot render directly.
+        video.src = "/processed_feed/" + job.output + "?" + Date.now();
+        video.style.display = "block";
+        document.getElementById("downloads").innerHTML =
+            '<p><a href="/live/' + job.output + '" download>Download annotated video</a> | ' +
+            '<a href="/live/' + job.csv + '" download>Download blendshape CSV</a></p>';
+    } else if (job.status === "error") {
+        uploadStatus.textContent = "Processing failed: " + job.error;
+    } else {
+        uploadStatus.textContent = "Processing video: " + (job.progress || 0) + "%";
+        setTimeout(() => pollJob(jobId), 800);
+    }
+}
+
+
+</script>
+
+
+</body>
+
+</html>
